@@ -3,5 +3,6 @@
     "wifi_pass": "YOUR_WIFI_PASSWORD",
     "prusalink_host": "192.168.1.100",
     "prusalink_api_key": "YOUR_API_KEY",
+    "printer_name": "Printer 1",
     "poll_interval": 30
 }

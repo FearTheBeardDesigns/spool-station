@@ -1,4 +1,4 @@
-"""Settings panel — API port, slicer paths, database management."""
+"""Settings panel — API port, slicer paths, database management, printer tracking."""
 
 from __future__ import annotations
 
@@ -12,16 +12,24 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from app.prusalink.config import PrinterConfig, load_config, save_config
+from app.prusalink.config import (
+    PrinterConfig,
+    load_all_configs,
+    load_config,
+    save_all_configs,
+)
 
 
 def _detect_prusaslicer_dir() -> str:
@@ -53,6 +61,7 @@ class SettingsPanel(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._printer_configs: list[PrinterConfig] = []
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -169,84 +178,130 @@ class SettingsPanel(QWidget):
 
         layout.addWidget(db_group)
 
-        # Printer Tracking (ESP32 + PrusaLink)
+        # Printer Tracking (multi-printer)
         printer_group = QGroupBox("PRINTER TRACKING")
         printer_layout = QVBoxLayout(printer_group)
 
-        # Load saved config
-        self._printer_config = load_config()
-
-        # PrusaLink Host
-        pl_row = QHBoxLayout()
-        pl_row.addWidget(QLabel("PRUSALINK HOST:"))
-        self._pl_host = QLineEdit(self._printer_config.prusalink_host)
-        self._pl_host.setPlaceholderText("192.168.1.100")
-        self._pl_host.setToolTip("PrusaLink printer IP address or hostname")
-        pl_row.addWidget(self._pl_host)
-
-        pl_test = QPushButton("TEST")
-        pl_test.setToolTip("Test PrusaLink connection")
-        pl_test.clicked.connect(self._test_prusalink)
-        pl_row.addWidget(pl_test)
-        printer_layout.addLayout(pl_row)
-
-        # PrusaLink API Key
-        key_row = QHBoxLayout()
-        key_row.addWidget(QLabel("API KEY:"))
-        self._pl_key = QLineEdit(self._printer_config.prusalink_api_key)
-        self._pl_key.setPlaceholderText("Your PrusaLink API key")
-        self._pl_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._pl_key.setToolTip("PrusaLink API key (found in printer settings)")
-        key_row.addWidget(self._pl_key)
-        printer_layout.addLayout(key_row)
-
-        # ESP32 Host
-        esp_row = QHBoxLayout()
-        esp_row.addWidget(QLabel("ESP32 HOST:"))
-        self._esp_host = QLineEdit(self._printer_config.esp32_host)
-        self._esp_host.setPlaceholderText("192.168.1.101")
-        self._esp_host.setToolTip("ESP32 NFC logger IP address")
-        esp_row.addWidget(self._esp_host)
-
-        esp_test = QPushButton("TEST")
-        esp_test.setToolTip("Test ESP32 connection")
-        esp_test.clicked.connect(self._test_esp32)
-        esp_row.addWidget(esp_test)
-        printer_layout.addLayout(esp_row)
-
-        # ESP32 status
-        self._esp_status = QLabel("")
-        self._esp_status.setStyleSheet(
-            "color: #8888AA; font-size: 12px; background: transparent;"
+        # Printer table
+        self._printer_table = QTableWidget()
+        self._printer_table.setColumnCount(4)
+        self._printer_table.setHorizontalHeaderLabels([
+            "NAME", "PRUSALINK HOST", "ESP32 HOST", "AUTO-SYNC",
+        ])
+        self._printer_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
         )
-        printer_layout.addWidget(self._esp_status)
+        self._printer_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._printer_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._printer_table.setMaximumHeight(160)
+        self._printer_table.setToolTip("Configured printers with ESP32 NFC readers")
+        self._printer_table.doubleClicked.connect(self._edit_printer)
+        printer_layout.addWidget(self._printer_table)
 
-        # Auto-sync checkbox
-        self._auto_sync = QCheckBox("AUTO-SYNC ON STARTUP")
-        self._auto_sync.setChecked(self._printer_config.auto_sync)
-        self._auto_sync.setToolTip(
-            "Automatically sync completed prints from ESP32 when Spool Station starts"
-        )
-        printer_layout.addWidget(self._auto_sync)
+        # Printer buttons
+        printer_btn_row = QHBoxLayout()
 
-        # Sync now + Save
-        sync_row = QHBoxLayout()
-        sync_btn = QPushButton("SYNC NOW")
-        sync_btn.setObjectName("primaryButton")
-        sync_btn.setToolTip("Manually sync completed prints from ESP32")
-        sync_btn.clicked.connect(self._sync_now)
-        sync_row.addWidget(sync_btn)
+        add_btn = QPushButton("ADD PRINTER")
+        add_btn.setObjectName("primaryButton")
+        add_btn.setToolTip("Add a new printer with ESP32 NFC reader")
+        add_btn.clicked.connect(self._add_printer)
+        printer_btn_row.addWidget(add_btn)
 
-        save_printer_btn = QPushButton("SAVE")
-        save_printer_btn.setToolTip("Save printer tracking configuration")
-        save_printer_btn.clicked.connect(self._save_printer_config)
-        sync_row.addWidget(save_printer_btn)
+        edit_btn = QPushButton("EDIT")
+        edit_btn.setToolTip("Edit selected printer configuration")
+        edit_btn.clicked.connect(self._edit_printer)
+        printer_btn_row.addWidget(edit_btn)
 
-        sync_row.addStretch()
-        printer_layout.addLayout(sync_row)
+        remove_btn = QPushButton("REMOVE")
+        remove_btn.setToolTip("Remove selected printer")
+        remove_btn.clicked.connect(self._remove_printer)
+        printer_btn_row.addWidget(remove_btn)
+
+        sync_all_btn = QPushButton("SYNC ALL")
+        sync_all_btn.setToolTip("Sync completed prints from all configured printers")
+        sync_all_btn.clicked.connect(self._sync_all)
+        printer_btn_row.addWidget(sync_all_btn)
+
+        printer_btn_row.addStretch()
+        printer_layout.addLayout(printer_btn_row)
 
         layout.addWidget(printer_group)
         layout.addStretch()
+
+        # Load printer configs into table
+        self._load_printer_table()
+
+    def _load_printer_table(self) -> None:
+        """Load all printer configs and populate the table."""
+        self._printer_configs = load_all_configs()
+        self._printer_table.setRowCount(len(self._printer_configs))
+        for i, cfg in enumerate(self._printer_configs):
+            name_item = QTableWidgetItem(cfg.name or f"Printer {i + 1}")
+            name_item.setData(Qt.ItemDataRole.UserRole, cfg.id)
+            self._printer_table.setItem(i, 0, name_item)
+            self._printer_table.setItem(i, 1, QTableWidgetItem(cfg.prusalink_host))
+            self._printer_table.setItem(i, 2, QTableWidgetItem(cfg.esp32_host))
+            sync_text = "Yes" if cfg.auto_sync else "No"
+            self._printer_table.setItem(i, 3, QTableWidgetItem(sync_text))
+
+    def _get_selected_printer_index(self) -> int | None:
+        row = self._printer_table.currentRow()
+        return row if row >= 0 else None
+
+    def _add_printer(self) -> None:
+        from app.widgets.printer_edit_dialog import PrinterEditDialog
+
+        dlg = PrinterEditDialog(parent=self)
+        if dlg.exec() == PrinterEditDialog.DialogCode.Accepted:
+            config = dlg.get_config()
+            self._printer_configs.append(config)
+            save_all_configs(self._printer_configs)
+            self._load_printer_table()
+
+    def _edit_printer(self) -> None:
+        idx = self._get_selected_printer_index()
+        if idx is None:
+            return
+
+        from app.widgets.printer_edit_dialog import PrinterEditDialog
+
+        config = self._printer_configs[idx]
+        dlg = PrinterEditDialog(config=config, parent=self)
+        if dlg.exec() == PrinterEditDialog.DialogCode.Accepted:
+            self._printer_configs[idx] = dlg.get_config()
+            save_all_configs(self._printer_configs)
+            self._load_printer_table()
+
+    def _remove_printer(self) -> None:
+        idx = self._get_selected_printer_index()
+        if idx is None:
+            return
+
+        name = self._printer_configs[idx].name or f"Printer {idx + 1}"
+        reply = QMessageBox.question(
+            self,
+            "Remove Printer",
+            f"Remove printer '{name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._printer_configs.pop(idx)
+            save_all_configs(self._printer_configs)
+            self._load_printer_table()
+
+    def _sync_all(self) -> None:
+        """Sync all configured printers."""
+        from app.prusalink.sync import sync_all_printers
+
+        configs = [c for c in self._printer_configs if c.esp32_host]
+        if not configs:
+            QMessageBox.information(
+                self, "No Printers", "Add a printer with an ESP32 host first."
+            )
+            return
+
+        result = sync_all_printers(configs)
+        QMessageBox.information(self, "Sync Result", result.summary)
 
     def _browse(self, line_edit: QLineEdit) -> None:
         path = QFileDialog.getExistingDirectory(self, "SELECT DIRECTORY")
@@ -265,8 +320,6 @@ class SettingsPanel(QWidget):
             shutil.copy2(str(DB_PATH), dest)
 
     def _import_db(self) -> None:
-        from PyQt6.QtWidgets import QMessageBox
-
         QMessageBox.information(
             self,
             "Import",
@@ -283,87 +336,8 @@ class SettingsPanel(QWidget):
     def get_orca_path(self) -> str:
         return self._orca_path.text().strip()
 
-    def _save_printer_config(self) -> None:
-        """Save printer tracking settings to disk."""
-        self._printer_config.prusalink_host = self._pl_host.text().strip()
-        self._printer_config.prusalink_api_key = self._pl_key.text().strip()
-        self._printer_config.esp32_host = self._esp_host.text().strip()
-        self._printer_config.auto_sync = self._auto_sync.isChecked()
-        save_config(self._printer_config)
-        QMessageBox.information(self, "Saved", "Printer tracking settings saved.")
-
-    def _test_prusalink(self) -> None:
-        """Test PrusaLink connection."""
-        from app.prusalink.sync import test_prusalink_connection
-
-        host = self._pl_host.text().strip()
-        key = self._pl_key.text().strip()
-        if not host or not key:
-            QMessageBox.warning(self, "Missing", "Enter PrusaLink host and API key.")
-            return
-
-        result = test_prusalink_connection(host, key)
-        if result:
-            name = result.get("name", "Unknown Printer")
-            QMessageBox.information(
-                self, "Connected", f"PrusaLink connected!\nPrinter: {name}"
-            )
-        else:
-            QMessageBox.warning(
-                self, "Failed", "Could not connect to PrusaLink.\nCheck host and API key."
-            )
-
-    def _test_esp32(self) -> None:
-        """Test ESP32 connection."""
-        from app.prusalink.sync import test_esp32_connection
-
-        host = self._esp_host.text().strip()
-        if not host:
-            QMessageBox.warning(self, "Missing", "Enter ESP32 host address.")
-            return
-
-        result = test_esp32_connection(host)
-        if result:
-            spool = result.get("active_spool_id", "None")
-            state = result.get("printer_state", "UNKNOWN")
-            self._esp_status.setText(
-                f"ESP32 connected — Active spool: {spool} | Printer: {state}"
-            )
-            self._esp_status.setStyleSheet(
-                "color: #39FF14; font-size: 12px; background: transparent;"
-            )
-            QMessageBox.information(self, "Connected", "ESP32 connected!")
-        else:
-            self._esp_status.setText("ESP32 not reachable")
-            self._esp_status.setStyleSheet(
-                "color: #FF2D95; font-size: 12px; background: transparent;"
-            )
-            QMessageBox.warning(
-                self, "Failed", "Could not connect to ESP32.\nCheck the IP address."
-            )
-
-    def _sync_now(self) -> None:
-        """Run a manual sync from ESP32."""
-        from app.prusalink.sync import sync_pending_prints
-
-        host = self._pl_host.text().strip()
-        key = self._pl_key.text().strip()
-        esp = self._esp_host.text().strip()
-
-        if not esp:
-            QMessageBox.warning(self, "Missing", "Enter ESP32 host address.")
-            return
-
-        config = PrinterConfig(
-            prusalink_host=host,
-            prusalink_api_key=key,
-            esp32_host=esp,
-        )
-        result = sync_pending_prints(config)
-        QMessageBox.information(self, "Sync Result", result.summary)
-
     def get_printer_config(self) -> PrinterConfig:
-        """Return current printer config (from saved file)."""
+        """Return first printer config (backward compat)."""
         return load_config()
 
     def set_api_status(self, running: bool) -> None:

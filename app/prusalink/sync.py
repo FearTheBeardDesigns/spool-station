@@ -22,6 +22,7 @@ class SyncResult:
     total_grams: float = 0.0
     spool_names: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    _printer_names: list[str] = field(default_factory=list)
 
     @property
     def summary(self) -> str:
@@ -29,7 +30,10 @@ class SyncResult:
             return "No pending prints to sync"
         parts = []
         if self.prints_synced:
-            parts.append(f"Synced {self.prints_synced} print(s): {self.total_grams:.1f}g total")
+            msg = f"Synced {self.prints_synced} print(s): {self.total_grams:.1f}g total"
+            if self._printer_names:
+                msg += f" from {', '.join(self._printer_names)}"
+            parts.append(msg)
         if self.spool_names:
             parts.append(f"Spools: {', '.join(self.spool_names)}")
         if self.errors:
@@ -166,6 +170,33 @@ def sync_pending_prints(config: PrinterConfig) -> SyncResult:
         session.close()
 
     return result
+
+
+def sync_all_printers(configs: list[PrinterConfig]) -> SyncResult:
+    """Sync pending prints from all configured printers.
+
+    Aggregates results across all printers into a single SyncResult.
+    """
+    combined = SyncResult()
+    printer_names = []
+
+    for config in configs:
+        if not config.esp32_host:
+            continue
+        result = sync_pending_prints(config)
+        combined.prints_synced += result.prints_synced
+        combined.total_grams += result.total_grams
+        combined.spool_names.extend(result.spool_names)
+        if result.errors:
+            label = config.name or config.esp32_host
+            combined.errors.extend(f"[{label}] {e}" for e in result.errors)
+        if result.prints_synced > 0:
+            printer_names.append(config.name or config.esp32_host)
+
+    # Override summary for multi-printer context
+    if printer_names and len(configs) > 1:
+        combined._printer_names = printer_names
+    return combined
 
 
 def test_esp32_connection(esp32_host: str) -> dict | None:

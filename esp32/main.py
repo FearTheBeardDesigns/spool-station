@@ -95,6 +95,7 @@ def main():
         "active_spool_id": None,
         "printer_state": "UNKNOWN",
         "prusalink_connected": False,
+        "printer_name": config.get("printer_name", ""),
         "pending": load_pending(),
         "prev_state": "UNKNOWN",
     }

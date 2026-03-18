@@ -427,6 +427,51 @@ class InventoryPanel(QWidget):
             session.close()
         self.refresh()
 
+    def _pick_printer(self, title: str = "Select Printer") -> "PrinterConfig | None":
+        """Show picker if multiple printers configured, return selected config."""
+        from app.prusalink.config import load_all_configs
+
+        configs = load_all_configs()
+        esp_configs = [c for c in configs if c.esp32_host]
+
+        if not esp_configs:
+            QMessageBox.warning(
+                self,
+                "No Printers Configured",
+                "Add a printer with ESP32 host in Settings → Printer Tracking first.",
+            )
+            return None
+
+        if len(esp_configs) == 1:
+            return esp_configs[0]
+
+        # Multiple printers — show picker
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.setMinimumWidth(300)
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel("Choose a printer:"))
+
+        combo = QComboBox()
+        for c in esp_configs:
+            combo.addItem(c.name or c.esp32_host, c.id)
+        v.addWidget(combo)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        v.addWidget(buttons)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        selected_id = combo.currentData()
+        return next((c for c in esp_configs if c.id == selected_id), None)
+
     def _write_nfc_tag(self) -> None:
         """Open NFC write dialog for the selected spool."""
         spool_id = self._get_selected_spool_id()
@@ -434,16 +479,10 @@ class InventoryPanel(QWidget):
             QMessageBox.information(self, "No Selection", "Select a spool first.")
             return
 
-        from app.prusalink.config import load_config
         from app.widgets.nfc_write_dialog import NfcWriteDialog
 
-        config = load_config()
-        if not config.esp32_host:
-            QMessageBox.warning(
-                self,
-                "No ESP32 Configured",
-                "Set the ESP32 host address in Settings → Printer Tracking first.",
-            )
+        config = self._pick_printer("Select Printer for NFC Write")
+        if config is None:
             return
 
         session = get_session()
@@ -472,20 +511,27 @@ class InventoryPanel(QWidget):
             session.close()
 
     def _sync_printer(self) -> None:
-        """Manually sync completed prints from ESP32."""
-        from app.prusalink.config import PrinterConfig, load_config
-        from app.prusalink.sync import sync_pending_prints
+        """Manually sync completed prints — pick printer or sync all."""
+        from app.prusalink.config import load_all_configs
+        from app.prusalink.sync import sync_all_printers, sync_pending_prints
 
-        config = load_config()
-        if not config.esp32_host:
+        configs = load_all_configs()
+        esp_configs = [c for c in configs if c.esp32_host]
+
+        if not esp_configs:
             QMessageBox.warning(
                 self,
-                "No ESP32 Configured",
-                "Set the ESP32 host address in Settings → Printer Tracking first.",
+                "No Printers Configured",
+                "Add a printer with ESP32 host in Settings → Printer Tracking first.",
             )
             return
 
-        result = sync_pending_prints(config)
+        if len(esp_configs) == 1:
+            result = sync_pending_prints(esp_configs[0])
+        else:
+            # Multiple printers — sync all
+            result = sync_all_printers(esp_configs)
+
         QMessageBox.information(self, "Sync Result", result.summary)
         if result.prints_synced > 0:
             self.refresh()

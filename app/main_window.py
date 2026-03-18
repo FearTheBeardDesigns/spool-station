@@ -156,21 +156,21 @@ class MainWindow(QMainWindow):
             self._status_bar.showMessage(f"API failed to start: {e}")
 
     def _auto_sync(self) -> None:
-        """Auto-sync completed prints from ESP32 on startup if enabled."""
+        """Auto-sync completed prints from all configured printers on startup."""
         try:
-            from app.prusalink.config import load_config
-            from app.prusalink.sync import sync_pending_prints
+            from app.prusalink.config import load_all_configs
+            from app.prusalink.sync import sync_all_printers
 
-            config = load_config()
-            if not config.auto_sync or not config.esp32_host:
+            configs = load_all_configs()
+            auto_configs = [c for c in configs if c.auto_sync and c.esp32_host]
+            if not auto_configs:
                 return
 
-            result = sync_pending_prints(config)
+            result = sync_all_printers(auto_configs)
             if result.prints_synced > 0:
                 self._status_bar.showMessage(
                     f"Auto-sync: {result.summary}", 10000
                 )
-                # Refresh inventory if visible
                 self._inventory_panel.refresh()
             elif result.errors:
                 self._status_bar.showMessage(
@@ -180,16 +180,17 @@ class MainWindow(QMainWindow):
             pass  # Silent fail on startup — don't block the app
 
     def _background_sync(self) -> None:
-        """Periodic background sync (every 5 minutes)."""
+        """Periodic background sync (every 5 minutes) across all printers."""
         try:
-            from app.prusalink.config import load_config
-            from app.prusalink.sync import sync_pending_prints
+            from app.prusalink.config import load_all_configs
+            from app.prusalink.sync import sync_all_printers
 
-            config = load_config()
-            if not config.auto_sync or not config.esp32_host:
+            configs = load_all_configs()
+            auto_configs = [c for c in configs if c.auto_sync and c.esp32_host]
+            if not auto_configs:
                 return
 
-            result = sync_pending_prints(config)
+            result = sync_all_printers(auto_configs)
             if result.prints_synced > 0:
                 self._status_bar.showMessage(
                     f"Background sync: {result.summary}", 10000

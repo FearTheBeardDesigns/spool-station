@@ -49,6 +49,7 @@ def handle_request(client, state, nfc_reader):
                 "prusalink_connected": state.get("prusalink_connected", False),
                 "active_spool_id": state.get("active_spool_id"),
                 "printer_state": state.get("printer_state", "UNKNOWN"),
+                "printer_name": state.get("printer_name", ""),
                 "version": "1.0.0",
             })
 
