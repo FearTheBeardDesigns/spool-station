@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -71,6 +71,14 @@ class MainWindow(QMainWindow):
 
         # Start API server
         self._start_api()
+
+        # Auto-sync from ESP32 on startup (delayed to let UI finish loading)
+        QTimer.singleShot(2000, self._auto_sync)
+
+        # Periodic background sync every 5 minutes
+        self._sync_timer = QTimer(self)
+        self._sync_timer.timeout.connect(self._background_sync)
+        self._sync_timer.start(5 * 60 * 1000)
 
     def _build_header(self) -> QWidget:
         """Build the branded header bar."""
@@ -146,3 +154,46 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._settings_panel.set_api_status(False)
             self._status_bar.showMessage(f"API failed to start: {e}")
+
+    def _auto_sync(self) -> None:
+        """Auto-sync completed prints from ESP32 on startup if enabled."""
+        try:
+            from app.prusalink.config import load_config
+            from app.prusalink.sync import sync_pending_prints
+
+            config = load_config()
+            if not config.auto_sync or not config.esp32_host:
+                return
+
+            result = sync_pending_prints(config)
+            if result.prints_synced > 0:
+                self._status_bar.showMessage(
+                    f"Auto-sync: {result.summary}", 10000
+                )
+                # Refresh inventory if visible
+                self._inventory_panel.refresh()
+            elif result.errors:
+                self._status_bar.showMessage(
+                    f"Auto-sync: {result.summary}", 10000
+                )
+        except Exception:
+            pass  # Silent fail on startup — don't block the app
+
+    def _background_sync(self) -> None:
+        """Periodic background sync (every 5 minutes)."""
+        try:
+            from app.prusalink.config import load_config
+            from app.prusalink.sync import sync_pending_prints
+
+            config = load_config()
+            if not config.auto_sync or not config.esp32_host:
+                return
+
+            result = sync_pending_prints(config)
+            if result.prints_synced > 0:
+                self._status_bar.showMessage(
+                    f"Background sync: {result.summary}", 10000
+                )
+                self._inventory_panel.refresh()
+        except Exception:
+            pass

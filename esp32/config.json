@@ -1,0 +1,7 @@
+{
+    "wifi_ssid": "YOUR_WIFI_SSID",
+    "wifi_pass": "YOUR_WIFI_PASSWORD",
+    "prusalink_host": "192.168.1.100",
+    "prusalink_api_key": "YOUR_API_KEY",
+    "poll_interval": 30
+}

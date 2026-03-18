@@ -23,10 +23,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from sqlalchemy.orm import joinedload
+
 from app.db.engine import get_session
-from app.db.models import Filament, Vendor
+from app.db.models import Filament, Spool, Vendor
 from app.slicer.prusaslicer import generate_prusaslicer_profile
+from app.slicer.prusaslicer import generate_spool_profile as prusa_spool_profile
 from app.slicer.orcaslicer import generate_orcaslicer_profile
+from app.slicer.orcaslicer import generate_spool_profile as orca_spool_profile
 
 
 class ProfilesPanel(QWidget):
@@ -91,6 +95,26 @@ class ProfilesPanel(QWidget):
         browse_btn.clicked.connect(self._browse_output)
         out_layout.addWidget(browse_btn)
         layout.addWidget(out_group)
+
+        # Spool profiles toggle
+        spool_group = QGroupBox("SPOOL PROFILES")
+        spool_layout = QVBoxLayout(spool_group)
+        self._spool_profiles = QCheckBox("GENERATE PER-SPOOL PROFILES")
+        self._spool_profiles.setToolTip(
+            "Generate profiles for each physical spool in inventory.\n"
+            "Profile names include remaining weight and correct spool color\n"
+            "for accurate 3D preview in the slicer."
+        )
+        spool_layout.addWidget(self._spool_profiles)
+        spool_info = QLabel(
+            "Per-spool profiles show remaining weight and correct color\n"
+            "in PrusaSlicer/OrcaSlicer 3D preview."
+        )
+        spool_info.setStyleSheet(
+            "color: #8888AA; font-size: 12px; background: transparent;"
+        )
+        spool_layout.addWidget(spool_info)
+        layout.addWidget(spool_group)
 
         # Generate button
         gen_btn = QPushButton("GENERATE PROFILES")
@@ -205,8 +229,44 @@ class ProfilesPanel(QWidget):
                 self._log.append(f"  \u2713 {filename}")
                 count += 1
 
+            # Generate spool profiles if toggle is on
+            spool_count = 0
+            if self._spool_profiles.isChecked():
+                spools = (
+                    session.query(Spool)
+                    .options(
+                        joinedload(Spool.filament).joinedload(Filament.vendor)
+                    )
+                    .filter(Spool.archived == False)  # noqa: E712
+                    .all()
+                )
+                for sp in spools:
+                    fil = sp.filament
+                    vname = fil.vendor.name if fil.vendor else "Unknown"
+                    color_name = fil.color_name or fil.name
+
+                    if is_prusa:
+                        content = prusa_spool_profile(sp, fil, vname)
+                        filename = f"[Spool] {vname} {fil.material} {color_name}.ini"
+                        filepath = Path(output_dir) / filename
+                        filepath.write_text(content, encoding="utf-8")
+                    else:
+                        content = orca_spool_profile(sp, fil, vname)
+                        filename = f"[Spool] {vname} {fil.material} {color_name}.json"
+                        filepath = Path(output_dir) / filename
+                        filepath.write_text(
+                            json.dumps(content, indent=2), encoding="utf-8"
+                        )
+
+                    self._log.append(f"  \u2713 {filename}")
+                    spool_count += 1
+
             slicer_name = "PrusaSlicer" if is_prusa else "OrcaSlicer"
-            self._log.append(f"\nGenerated {count} {slicer_name} profiles to:")
+            total = count + spool_count
+            parts = [f"Generated {count} filament profiles"]
+            if spool_count:
+                parts.append(f"{spool_count} spool profiles")
+            self._log.append(f"\n{' + '.join(parts)} for {slicer_name} to:")
             self._log.append(f"  {output_dir}")
         except Exception as e:
             self._log.append(f"\n  \u2717 Error: {e}")

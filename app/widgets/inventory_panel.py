@@ -115,6 +115,17 @@ class InventoryPanel(QWidget):
         archive_btn.clicked.connect(self._archive_spool)
         btn_row.addWidget(archive_btn)
 
+        nfc_btn = QPushButton("WRITE NFC TAG")
+        nfc_btn.setToolTip("Write the selected spool's ID to an NFC tag via ESP32")
+        nfc_btn.clicked.connect(self._write_nfc_tag)
+        btn_row.addWidget(nfc_btn)
+
+        sync_btn = QPushButton("SYNC PRINTER")
+        sync_btn.setObjectName("transferButton")
+        sync_btn.setToolTip("Sync completed prints from ESP32 and deduct filament usage")
+        sync_btn.clicked.connect(self._sync_printer)
+        btn_row.addWidget(sync_btn)
+
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -415,3 +426,66 @@ class InventoryPanel(QWidget):
         finally:
             session.close()
         self.refresh()
+
+    def _write_nfc_tag(self) -> None:
+        """Open NFC write dialog for the selected spool."""
+        spool_id = self._get_selected_spool_id()
+        if spool_id is None:
+            QMessageBox.information(self, "No Selection", "Select a spool first.")
+            return
+
+        from app.prusalink.config import load_config
+        from app.widgets.nfc_write_dialog import NfcWriteDialog
+
+        config = load_config()
+        if not config.esp32_host:
+            QMessageBox.warning(
+                self,
+                "No ESP32 Configured",
+                "Set the ESP32 host address in Settings → Printer Tracking first.",
+            )
+            return
+
+        session = get_session()
+        try:
+            spool = (
+                session.query(Spool)
+                .options(joinedload(Spool.filament).joinedload(Filament.vendor))
+                .filter(Spool.id == spool_id)
+                .first()
+            )
+            if not spool:
+                return
+
+            dlg = NfcWriteDialog(
+                spool_id=spool.id,
+                spool_name=spool.filament.name,
+                vendor_name=spool.filament.vendor.name if spool.filament.vendor else "?",
+                color_hex=spool.filament.color_hex or "#FFFFFF",
+                material=spool.filament.material,
+                remaining_g=spool.remaining_weight_g,
+                esp32_host=config.esp32_host,
+                parent=self,
+            )
+            dlg.exec()
+        finally:
+            session.close()
+
+    def _sync_printer(self) -> None:
+        """Manually sync completed prints from ESP32."""
+        from app.prusalink.config import PrinterConfig, load_config
+        from app.prusalink.sync import sync_pending_prints
+
+        config = load_config()
+        if not config.esp32_host:
+            QMessageBox.warning(
+                self,
+                "No ESP32 Configured",
+                "Set the ESP32 host address in Settings → Printer Tracking first.",
+            )
+            return
+
+        result = sync_pending_prints(config)
+        QMessageBox.information(self, "Sync Result", result.summary)
+        if result.prints_synced > 0:
+            self.refresh()
